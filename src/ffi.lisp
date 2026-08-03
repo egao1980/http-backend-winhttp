@@ -26,6 +26,8 @@
 (defconstant +winhttp-auth-negotiate+ 16)
 (defconstant +error-invalid-parameter+ 87)
 (defconstant +error-io-pending+ 997)
+;;; WinHttpSendRequest dwTotalLength when body length is unknown (chunked).
+(defconstant +winhttp-ignore-request-total-length+ #xffffffff)
 
 #+ (or win32 windows mswindows)
 (progn
@@ -40,6 +42,12 @@
     (supported-schemes :pointer)
     (first-scheme :pointer)
     (auth-target :pointer))
+
+  (cffi:defcfun (%write-data "WinHttpWriteData" :convention :stdcall) :boolean
+    (hreq :pointer)
+    (buffer :pointer)
+    (to-write :uint32)
+    (written :pointer))
 
   (defun open-session (user-agent access-type &key (async t))
     (winhttp::with-wide-string (u user-agent)
@@ -81,7 +89,42 @@
 
   (defun pending-p ()
     "True if last WinHTTP call returned ERROR_IO_PENDING."
-    (= (cffi:foreign-funcall "GetLastError" :uint32) +error-io-pending+)))
+    (= (cffi:foreign-funcall "GetLastError" :uint32) +error-io-pending+))
+
+  (defun send-request-total (hreq total-length &optional (optional #()))
+    "WinHttpSendRequest with explicit dwTotalLength (body via WriteData when optional empty)."
+    (let* ((seq (or optional #()))
+           (count (length seq)))
+      (if (zerop count)
+          (let ((ok (winhttp::%send-request
+                     hreq (cffi:null-pointer) 0
+                     (cffi:null-pointer) 0
+                     total-length
+                     (cffi:null-pointer))))
+            (unless (or ok (pending-p))
+              (winhttp::get-last-error))
+            ok)
+          ;; Vector path with explicit total (normally total = count).
+          (cffi:with-foreign-object (buf :uint8 count)
+            (dotimes (i count)
+              (setf (cffi:mem-aref buf :uint8 i) (aref seq i)))
+            (let ((ok (winhttp::%send-request
+                       hreq (cffi:null-pointer) 0
+                       buf count total-length
+                       (cffi:null-pointer))))
+              (unless (or ok (pending-p))
+                (winhttp::get-last-error))
+              ok)))))
+
+  (defun write-data (hreq foreign-buf nbytes)
+    "WinHttpWriteData. FOREIGN-BUF must stay live until WRITE_COMPLETE when async.
+     Returns T on sync complete, NIL when pending (or raises on hard error)."
+    (cffi:with-foreign-object (written :uint32)
+      (let ((ok (%write-data hreq foreign-buf nbytes written)))
+        (cond
+          (ok t)
+          ((pending-p) nil)
+          (t (winhttp::get-last-error)))))))
 
 #- (or win32 windows mswindows)
 (progn
@@ -97,4 +140,12 @@
     (declare (ignore args))
     (error 'unsupported-operation :operation :winhttp
            :message "http-backend-winhttp requires Windows"))
-  (defun pending-p () nil))
+  (defun pending-p () nil)
+  (defun send-request-total (&rest args)
+    (declare (ignore args))
+    (error 'unsupported-operation :operation :winhttp
+           :message "http-backend-winhttp requires Windows"))
+  (defun write-data (&rest args)
+    (declare (ignore args))
+    (error 'unsupported-operation :operation :winhttp
+           :message "http-backend-winhttp requires Windows")))

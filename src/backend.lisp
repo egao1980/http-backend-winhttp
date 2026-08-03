@@ -72,44 +72,91 @@
                                       (http-request-headers request)))
              (ae (%accept-encoding-header
                   (http-request-accept-encoding request)))
-             (auth (effective-auth client request)))
+             (auth (effective-auth client request))
+             (jar (resolve-cookie-jar client request
+                                      :url (http-request-url request)))
+             (max-redirects (or (http-request-max-redirects request)
+                                (http-client-max-redirects client)
+                                5)))
         (setf headers (inject-auth-range-headers
                        headers :auth auth :range (http-request-range request)))
         (when ae
           (setf headers (acons "accept-encoding" ae
                                (remove "accept-encoding" headers
                                        :key #'car :test #'string-equal))))
+        (setf headers (inject-cookie-header headers jar
+                                            (quri:render-uri uri)))
         (multiple-value-bind (content extra-headers content-length)
             (prepare-request-body request)
-          (declare (ignore content-length))
           (dolist (pair extra-headers)
             (setf headers (acons (car pair) (cdr pair)
                                  (remove (car pair) headers
                                          :key #'car :test #'string-equal))))
-          (when (streamp content)
-            (error 'unsupported-operation
-                   :operation :stream-body
-                   :message "WinHTTP backend: pass octets/string body for now"))
-          (let ((content-octets
-                  (etypecase content
-                    (null #())
-                    ((vector (unsigned-byte 8)) content)
-                    (string (babel:string-to-octets content :encoding :utf-8))))
-                (handle
-                 (make-instance 'winhttp-request-handle
-                                :event-backend event-backend
-                                :event-loop event-loop
-                                :callback cb
-                                :error-callback eb-cb
-                                :want-stream want-stream
-                                :request request
-                                :client client
-                                :basic-auth (%basic-auth-cons auth))))
-            (%start-async-request handle uri method headers content-octets
-                                  :system-proxy-p system-p
-                                  :proxy-uri proxy-uri
-                                  :insecure (not (http-client-verify client)))
-            handle))))))
+          (multiple-value-bind (wire headers* stream-p chunked-p clen)
+              (normalize-request-wire content headers content-length)
+            (let ((handle
+                   (make-instance 'winhttp-request-handle
+                                  :event-backend event-backend
+                                  :event-loop event-loop
+                                  :callback cb
+                                  :error-callback eb-cb
+                                  :want-stream want-stream
+                                  :request request
+                                  :client client
+                                  :basic-auth (%basic-auth-cons auth)
+                                  :cookie-jar jar
+                                  :max-redirects max-redirects
+                                  :accept-encoding ae
+                                  :headers headers*
+                                  :stream-body-p stream-p
+                                  :chunked-p chunked-p
+                                  :content-length clen
+                                  :body-stream-src (and stream-p wire)
+                                  :content wire)))
+              (%start-async-request handle uri method headers* wire
+                                    :system-proxy-p system-p
+                                    :proxy-uri proxy-uri
+                                    :insecure (not (http-client-verify client)))
+              handle)))))))
+(defun apply-stream-upload-headers (headers content-length)
+  "Set Content-Length or Transfer-Encoding: chunked for a streamed upload.
+   Returns (values headers chunked-p)."
+  (let* ((chunked-p (null content-length))
+         (headers (if content-length
+                      (acons "content-length"
+                             (princ-to-string content-length)
+                             (remove "content-length" headers
+                                     :key #'car :test #'string-equal))
+                      (remove "content-length" headers
+                              :key #'car :test #'string-equal)))
+         (headers (if chunked-p
+                      (if (assoc "transfer-encoding" headers :test #'string-equal)
+                          headers
+                          (acons "transfer-encoding" "chunked" headers))
+                      headers)))
+    (values headers chunked-p)))
+
+(defun normalize-request-wire (content headers content-length)
+  "Wire body for WinHTTP: vector (buffered) or stream (WriteData).
+   Returns (values wire headers stream-p chunked-p content-length)."
+  (cond
+    ((streamp content)
+     (multiple-value-bind (headers* chunked-p)
+         (apply-stream-upload-headers headers content-length)
+       (values content headers* t chunked-p content-length)))
+    (t
+     (let ((octets (cond
+                     ((null content) #())
+                     ((typep content '(vector (unsigned-byte 8))) content)
+                     ((stringp content)
+                      (babel:string-to-octets content :encoding :utf-8))
+                     ((and (vectorp content) (every #'integerp content))
+                      (coerce content '(simple-array (unsigned-byte 8) (*))))
+                     (t (error 'http-protocol-error
+                               :message
+                               (format nil "unsupported request body type ~S"
+                                       (type-of content)))))))
+       (values octets headers nil nil (length octets))))))
 
 (defmethod cancel-request ((backend winhttp-backend) handle)
   (check-type handle winhttp-request-handle)

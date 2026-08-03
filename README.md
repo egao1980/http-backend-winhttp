@@ -8,7 +8,9 @@ MIT. Windows [`http-protocol`](https://github.com/egao1980/http-protocol) backen
 |---------|----------------|
 | True async I/O | `WINHTTP_FLAG_ASYNC` + status callbacks |
 | Event loop | Completions/`wake`+`defer` onto `event-protocol` (libuv) |
-| `:want-stream` | Gray `winhttp-body-input-stream` fed from `READ_COMPLETE` |
+| Download stream | `:want-stream` → Gray `winhttp-body-input-stream` + backpressure (`READ_COMPLETE`) |
+| Upload stream | `streamp` body → `SendRequest` (headers) + `WinHttpWriteData` (`WRITE_COMPLETE`) |
+| Chunked upload | unknown length → `Transfer-Encoding: chunked` + `WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH` |
 | Cancel | `WinHttpCloseHandle` on the request → `http-canceled` |
 | System proxy | `use-os-automatic-proxy-p` → `AUTOMATIC_PROXY` |
 | Proxy auth | Basic + NTLM + Negotiate/SSO (dexador#202) |
