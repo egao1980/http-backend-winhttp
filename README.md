@@ -11,6 +11,7 @@ MIT. Windows [`http-protocol`](https://github.com/egao1980/http-protocol) backen
 | Download stream | `:want-stream` → Gray `winhttp-body-input-stream` + backpressure (`READ_COMPLETE`) |
 | Upload stream | `streamp` body → `SendRequest` (headers) + `WinHttpWriteData` (`WRITE_COMPLETE`) |
 | Chunked upload | unknown length → `Transfer-Encoding: chunked` + `WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH` |
+| Bodies | `http-protocol` ≥ **0.2.0** `:form-data` / typed `:data` / `:content` via `prepare-request-body` |
 | Cancel | `WinHttpCloseHandle` on the request → `http-canceled` |
 | System proxy | `use-os-automatic-proxy-p` → `AUTOMATIC_PROXY` |
 | Proxy auth | Basic + NTLM + Negotiate/SSO (dexador#202) |

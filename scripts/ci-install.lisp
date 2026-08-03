@@ -81,7 +81,7 @@
 (call-with-ci-muffles
  (lambda ()
    ;; GHCR pulls before any ql:quickload that may load cffi/cl+ssl.
-   (ci-fetch "http-protocol")
+   (ci-fetch "http-protocol" :version "0.2.0")
    (ci-fetch "event-protocol")
    (ci-fetch "cffi" :version "0.24.1")
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
