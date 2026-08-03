@@ -26,14 +26,23 @@
 (defparameter *ci-ql-sources*
   '(("babel" :ql)
     ("trivial-features" :ql)
-    ("cl-unicode" :ql)
-    ("cffi" :ql))
-  "QL pins: cffi GHCR has no semver tag (digest-only); babel/cl-unicode as usual.")
+    ("cl-unicode" :ql))
+  "QL pins: babel already bootstrapped; cl-unicode OCI may lack idna-mapping.")
 
 (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems" :priority :prepend)
 
 (defun ci-on-disk-p (name)
   (cl-repository-client/quickload::system-already-installed-p name))
+
+(defun ci-install (oci-name &key version)
+  "Force OCI install (bypass 'already available via ASDF' from bootstrap QL)."
+  (let ((version (or version
+                     (error "ci-install: version required for ~a" oci-name))))
+    (format t "~&; ci: install ~a:~a~%" oci-name version)
+    (cl-repository-client/installer:install-system
+     "https://ghcr.io" (format nil "egao1980/cl-systems/~a" oci-name) version)
+    (cl-repository-client/asdf-integration:configure-asdf-source-registry)
+    version))
 
 (defun ci-fetch (name &key version)
   "Resolve + install NAME without ASDF-load or ql:quickload."
@@ -74,10 +83,9 @@
    ;; GHCR pulls before any ql:quickload that may load cffi/cl+ssl.
    (ci-fetch "http-protocol")
    (ci-fetch "event-protocol")
-   ;; cffi: no usable semver on ghcr.io/egao1980/cl-systems/cffi — QL.
-   ;; Also cover deferred missing deps + explicit asd deps.
+   (ci-fetch "cffi" :version "0.24.1")
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
-                "split-sequence" "trivial-gray-streams" "cffi" "winhttp"
+                "split-sequence" "trivial-gray-streams" "winhttp"
                 "blackbird" "cl-unicode"))
      (ci-ql n))))
 
