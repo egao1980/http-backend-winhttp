@@ -104,6 +104,38 @@
       (ok (not chunked-p))
       (ok (= 3 clen)))))
 
+(deftest prepare-body-form-data-and-typed-data
+  "http-protocol 0.2 body prep used by WinHTTP send path."
+  (let ((req (make-http-request :url "http://x"
+                                :form-data '(("q" . "hi there")))))
+    (multiple-value-bind (wire extra clen)
+        (prepare-request-body req)
+      (ok (equalp (babel:string-to-octets "q=hi+there") wire))
+      (ok (string-equal "application/x-www-form-urlencoded"
+                        (cdr (assoc "content-type" extra :test #'string-equal))))
+      (ok (= clen (length wire)))))
+  (let ((req (make-http-request :url "http://x"
+                                :data "hello" :data-type :text)))
+    (multiple-value-bind (wire extra clen)
+        (prepare-request-body req)
+      (ok (equalp (babel:string-to-octets "hello") wire))
+      (ok (search "text/plain"
+                  (cdr (assoc "content-type" extra :test #'string-equal))
+                  :test #'char-equal))
+      (ok (= 5 clen)))))
+
+(deftest response-data-with-deserializer
+  (let* ((ht (make-hash-table :test #'equal))
+         (_ (setf (gethash "content-type" ht) "application/json"))
+         (res (make-instance 'http-response
+                             :status 200
+                             :headers ht
+                             :body (babel:string-to-octets "{\"ok\":true}"))))
+    (declare (ignore _))
+    (with-data-deserializer (:json (lambda (o)
+                                     (babel:octets-to-string o :encoding :utf-8)))
+      (ok (search "ok" (response-data res :json) :test #'char-equal)))))
+
 (deftest body-stream-backpressure-full-p
   (let* ((space 0)
          (s (make-winhttp-body-input-stream
