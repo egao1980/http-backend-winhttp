@@ -26,33 +26,11 @@
 (defparameter *ci-ql-sources*
   '(("babel" :ql)
     ("trivial-features" :ql)
-    ("cl-unicode" :ql))
-  "QL pins: babel already bootstrapped; cl-unicode OCI v0.1.6 lacks idna-mapping.")
+    ("cl-unicode" :ql)
+    ("cffi" :ql))
+  "QL pins: cffi GHCR has no semver tag (digest-only); babel/cl-unicode as usual.")
 
 (cl-repo:add-registry "https://ghcr.io" :namespace "egao1980/cl-systems" :priority :prepend)
-
-(defun ci-newest-tag (oci-name)
-  "Newest version tag on ghcr.io/egao1980/cl-systems/NAME (excludes 'latest')."
-  (let* ((token (or (uiop:getenv "GITHUB_TOKEN") (uiop:getenv "GH_TOKEN")))
-         (auth (when token
-                 (cl-oci-client/auth:make-auth-config
-                  :username (or (uiop:getenv "GITHUB_ACTOR") "x-access-token")
-                  :password token)))
-         (reg (cl-oci-client/registry:make-registry "https://ghcr.io" :auth auth))
-         (repo (format nil "egao1980/cl-systems/~a" oci-name))
-         (tags (cl-oci-client/content-discovery:list-tags reg repo))
-         (version-tags (remove "latest" tags :test #'string=)))
-    (or (cl-repository-client/version-utils:select-preferred-version version-tags)
-        (first tags)
-        (error "ci-newest-tag: no tags for ~a" oci-name))))
-
-(defun ci-install (oci-name &key version)
-  (let ((version (or version (ci-newest-tag oci-name))))
-    (format t "~&; ci: install ~a:~a~%" oci-name version)
-    (cl-repository-client/installer:install-system
-     "https://ghcr.io" (format nil "egao1980/cl-systems/~a" oci-name) version)
-    (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-    version))
 
 (defun ci-on-disk-p (name)
   (cl-repository-client/quickload::system-already-installed-p name))
@@ -83,22 +61,25 @@
          (format t "~&; ci: deferring ql fallback: ~{~a~^, ~}~%"
                  cl-repository-client/quickload::*missing-deps-accumulator*)))))
   (cl-repository-client/asdf-integration:configure-asdf-source-registry)
-  (unless (ci-on-disk-p name)
-    (error "ci-fetch: ~a not on disk after install" name)))
+  (unless (or (ci-on-disk-p name) (asdf:find-system name nil))
+    (error "ci-fetch: ~a not on disk / ASDF after install" name)))
+
+(defun ci-ql (name)
+  (unless (or (ci-on-disk-p name) (asdf:find-system name nil))
+    (format t "~&; ci: ql fallback ~a~%" name)
+    (ql:quickload name :silent t)))
 
 (call-with-ci-muffles
  (lambda ()
-   ;; GHCR pulls before any ql:quickload that may load cffi.
+   ;; GHCR pulls before any ql:quickload that may load cffi/cl+ssl.
    (ci-fetch "http-protocol")
    (ci-fetch "event-protocol")
-   (ci-fetch "quri")
-   (ci-fetch "alexandria")
-   (ci-fetch "cffi")
+   ;; cffi: no usable semver on ghcr.io/egao1980/cl-systems/cffi — QL.
+   ;; Also cover deferred missing deps + explicit asd deps.
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
-                "split-sequence" "trivial-gray-streams" "winhttp"))
-     (unless (or (ci-on-disk-p n) (asdf:find-system n nil))
-       (format t "~&; ci: ql fallback ~a~%" n)
-       (ql:quickload n :silent t)))))
+                "split-sequence" "trivial-gray-streams" "cffi" "winhttp"
+                "blackbird" "cl-unicode"))
+     (ci-ql n))))
 
 (format t "~&; ci: install phase done~%")
 (uiop:quit 0)

@@ -26,8 +26,10 @@
 
 (call-with-ci-muffles
  (lambda ()
+   ;; Phase-1 QL does not persist into this fresh image — re-ql unpublished.
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
-                "split-sequence" "trivial-gray-streams" "winhttp"))
+                "split-sequence" "trivial-gray-streams" "cffi" "winhttp"
+                "blackbird" "cl-unicode"))
      (unless (asdf:find-system n nil)
        (format t "~&; ci: ql fallback ~a~%" n)
        (ql:quickload n :silent t)))
