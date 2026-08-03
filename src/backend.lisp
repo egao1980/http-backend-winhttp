@@ -72,13 +72,20 @@
                                       (http-request-headers request)))
              (ae (%accept-encoding-header
                   (http-request-accept-encoding request)))
-             (auth (effective-auth client request)))
+             (auth (effective-auth client request))
+             (jar (resolve-cookie-jar client request
+                                      :url (http-request-url request)))
+             (max-redirects (or (http-request-max-redirects request)
+                                (http-client-max-redirects client)
+                                5)))
         (setf headers (inject-auth-range-headers
                        headers :auth auth :range (http-request-range request)))
         (when ae
           (setf headers (acons "accept-encoding" ae
                                (remove "accept-encoding" headers
                                        :key #'car :test #'string-equal))))
+        (setf headers (inject-cookie-header headers jar
+                                            (quri:render-uri uri)))
         (multiple-value-bind (content extra-headers content-length)
             (prepare-request-body request)
           (declare (ignore content-length))
@@ -104,7 +111,11 @@
                                 :want-stream want-stream
                                 :request request
                                 :client client
-                                :basic-auth (%basic-auth-cons auth))))
+                                :basic-auth (%basic-auth-cons auth)
+                                :cookie-jar jar
+                                :max-redirects max-redirects
+                                :accept-encoding ae
+                                :headers headers)))
             (%start-async-request handle uri method headers content-octets
                                   :system-proxy-p system-p
                                   :proxy-uri proxy-uri

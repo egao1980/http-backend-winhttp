@@ -22,9 +22,21 @@
    (want-stream :initarg :want-stream :reader handle-want-stream-p)
    (uri :initarg :uri :accessor handle-uri)
    (method :initarg :method :accessor handle-method)
+   (headers :initarg :headers :accessor handle-headers :initform nil)
    (proxy-uri :initarg :proxy-uri :accessor handle-proxy-uri)
+   (system-proxy-p :initarg :system-proxy-p :accessor handle-system-proxy-p
+                   :initform nil)
+   (insecure :initarg :insecure :accessor handle-insecure-p :initform nil)
+   (user-agent :initarg :user-agent :accessor handle-user-agent :initform nil)
    (basic-auth :initarg :basic-auth :accessor handle-basic-auth)
    (content :initarg :content :accessor handle-content)
+   (accept-encoding :initarg :accept-encoding :accessor handle-accept-encoding
+                    :initform nil)
+   (cookie-jar :initarg :cookie-jar :accessor handle-cookie-jar :initform nil)
+   (max-redirects :initarg :max-redirects :accessor handle-max-redirects
+                  :initform 5)
+   (redirect-hops :initform 0 :accessor handle-redirect-hops)
+   (history :initform nil :accessor handle-history)
    (request :initarg :request :reader handle-http-request)
    (client :initarg :client :reader handle-client)
    (body-stream :initform nil :accessor handle-body-stream)
@@ -171,16 +183,15 @@
        (when (handle-read-buf h)
          (cffi:foreign-free (handle-read-buf h))
          (setf (handle-read-buf h) nil))
-       (if (handle-want-stream-p h)
+       (if (handle-body-stream h)
            (progn
              (body-eof (handle-body-stream h))
              (bt:with-lock-held ((handle-lock h))
                (setf (handle-finished-p h) t))
              (%marshal h (lambda () (%cleanup h))))
-           (let* ((octets (apply #'concatenate '(vector (unsigned-byte 8))
-                                 (nreverse (handle-body-chunks h))))
-                  (res (%make-response h octets)))
-             (%succeed h res))))
+           (let ((octets (apply #'concatenate '(vector (unsigned-byte 8))
+                                (nreverse (or (handle-body-chunks h) '())))))
+             (%finish-vector-body h octets))))
       (t
        (let ((piece (make-array n :element-type '(unsigned-byte 8))))
          (dotimes (i n)
@@ -196,35 +207,102 @@
                (push piece (handle-body-chunks h))
                (%kick-read h)))))))
 
-  (defun %make-response (h body)
+  (defun %should-follow-redirect-p (h status ht)
+    (let ((location (gethash "location" ht)))
+      (and location
+           (redirect-status-p status)
+           (plusp (handle-max-redirects h))
+           (< (handle-redirect-hops h) (handle-max-redirects h)))))
+
+  (defun %apply-ce (h body ht)
+    "Decode CE for vector or wrap stream (Gray CE chain)."
+    (let ((req (handle-http-request h)))
+      (if (streamp body)
+          (wrap-response-body-stream body ht
+                                     :decompress (http-request-decompress req))
+          (let* ((ce (gethash "content-encoding" ht))
+                 (codings (parse-content-encoding ce))
+                 (decoded (if (and codings (http-request-decompress req))
+                              (decode-content-codings codings body)
+                              body))
+                 (ht2 (let ((n (make-hash-table :test #'equal)))
+                        (maphash (lambda (k v) (setf (gethash k n) v)) ht)
+                        (when (and codings (http-request-decompress req))
+                          (remhash "content-encoding" n)
+                          (remhash "content-length" n))
+                        n)))
+            (values decoded ht2)))))
+
+  (defun %make-response (h body &key (history-for-final nil))
     (let* ((req (handle-http-request h))
            (uri (handle-uri h))
            (url (quri:render-uri uri))
            (ht (handle-headers-ht h))
-           (jar (resolve-cookie-jar (handle-client h) req :url url))
+           (jar (or (handle-cookie-jar h)
+                    (resolve-cookie-jar (handle-client h) req :url url)))
            (cookies (merge-response-cookies jar url ht)))
       (multiple-value-bind (body* headers*)
-          (if (streamp body)
-              (values body ht)
-              (let* ((ce (gethash "content-encoding" ht))
-                     (codings (parse-content-encoding ce))
-                     (decoded (if (and codings (http-request-decompress req))
-                                  (decode-content-codings codings body)
-                                  body))
-                     (ht2 (let ((n (make-hash-table :test #'equal)))
-                            (maphash (lambda (k v) (setf (gethash k n) v)) ht)
-                            (when (and codings (http-request-decompress req))
-                              (remhash "content-encoding" n)
-                              (remhash "content-length" n))
-                            n)))
-                (values decoded ht2)))
+          (%apply-ce h body ht)
         (make-instance 'http-response
                        :status (handle-status h)
                        :headers headers*
                        :body body*
                        :url url
                        :cookies cookies
+                       :history history-for-final
                        :request req))))
+
+  (defun %close-req-conn (h)
+    (when-let (r (handle-req h))
+      (%close-hinternet r)
+      (setf (handle-req h) nil))
+    (when-let (c (handle-conn h))
+      (%close-hinternet c)
+      (setf (handle-conn h) nil)))
+
+  (defun %follow-redirect (h body-octets)
+    "Push hop, prepare next request, reopen on the same session."
+    (let* ((status (handle-status h))
+           (ht (handle-headers-ht h))
+           (location (gethash "location" ht))
+           (jar (handle-cookie-jar h))
+           (hop (%make-response h body-octets)))
+      (push hop (handle-history h))
+      (incf (handle-redirect-hops h))
+      (handler-case
+          (let ((next (resolve-redirect-uri (handle-uri h) location)))
+            (when (and (streamp (handle-content h))
+                       (redirect-preserves-method-p status))
+              (error 'http-protocol-error
+                     :message "cannot replay streamed request body on redirect"))
+            (multiple-value-bind (method uri headers body)
+                (prepare-redirect-hop status next
+                                      (handle-method h)
+                                      (or (handle-content h) #())
+                                      (handle-headers h)
+                                      jar
+                                      (handle-accept-encoding h))
+              (%close-req-conn h)
+              (setf (handle-method h) method
+                    (handle-uri h) uri
+                    (handle-headers h) headers
+                    (handle-content h) body
+                    (handle-body-chunks h) nil
+                    (handle-headers-ht h) nil
+                    (handle-status h) nil
+                    (handle-finished-p h) nil
+                    (handle-headers-delivered-p h) nil)
+              (%open-request-on-session h)))
+        (error (e) (%fail h e)))))
+
+  (defun %finish-vector-body (h octets)
+    (let ((status (handle-status h))
+          (ht (handle-headers-ht h)))
+      (if (%should-follow-redirect-p h status ht)
+          (%follow-redirect h octets)
+          (%succeed h (%make-response
+                       h octets
+                       :history-for-final (nreverse (handle-history h)))))))
 
   (defun %on-headers (h)
     (let* ((req (handle-req h))
@@ -232,6 +310,10 @@
            (ht (%headers-hash req)))
       (setf (handle-status h) status
             (handle-headers-ht h) ht)
+      ;; Merge Set-Cookie even on hops we follow.
+      (merge-response-cookies (handle-cookie-jar h)
+                              (quri:render-uri (handle-uri h))
+                              ht)
       ;; 401/407 auth — set credentials + resend (connection-oriented).
       (when (member status '(401 407))
         (when (answer-auth-challenge req status ht
@@ -247,7 +329,8 @@
                     (winhttp::get-last-error))))
             (error (e) (%fail h e)))
           (return-from %on-headers)))
-      (if (handle-want-stream-p h)
+      (if (and (handle-want-stream-p h)
+               (not (%should-follow-redirect-p h status ht)))
           (let ((stream (make-winhttp-body-input-stream
                          :on-space
                          (lambda ()
@@ -255,7 +338,9 @@
                              (setf (handle-read-paused-p h) nil)
                              (%kick-read h))))))
             (setf (handle-body-stream h) stream)
-            (%succeed h (%make-response h stream))
+            (%succeed h (%make-response
+                         h stream
+                         :history-for-final (nreverse (copy-list (handle-history h)))))
             (%kick-read h))
           (progn
             (setf (handle-body-chunks h) nil)
@@ -289,58 +374,71 @@
             (otherwise))
         (error (e) (%fail h e)))))
 
+  (defun %open-request-on-session (h)
+    "Open conn+req on HANDLE-SESSION and SEND (async). Lisp cookies/redirects."
+    (let* ((uri (handle-uri h))
+           (method (handle-method h))
+           (headers (handle-headers h))
+           (content (handle-content h))
+           (proxy-uri (handle-proxy-uri h))
+           (https (string-equal (quri:uri-scheme uri) "https"))
+           (host (strip-ipv6-brackets (quri:uri-host uri)))
+           (port (or (quri:uri-port uri) (if https 443 80)))
+           (session (handle-session h))
+           (ctx (cffi:make-pointer (handle-id h)))
+           (conn (winhttp:http-connect session host port)))
+      (setf (handle-conn h) conn)
+      (let ((req (winhttp:http-open-request conn
+                                            :verb method
+                                            :url (%path-query uri)
+                                            :https-p https)))
+        (setf (handle-req h) req)
+        ;; Disable WinHTTP cookies/redirects — Lisp owns jars + history.
+        (set-option req +winhttp-option-disable-feature+
+                    (logior +winhttp-disable-cookies+
+                            +winhttp-disable-redirects+))
+        (set-option req +winhttp-option-autologon-policy+
+                    (autologon-policy-value))
+        (cffi:with-foreign-object (p :pointer)
+          (setf (cffi:mem-ref p :pointer) ctx)
+          (winhttp::%set-option req +winhttp-option-context+ p
+                                (cffi:foreign-type-size :pointer)))
+        (when proxy-uri
+          (set-request-proxy req
+                             (format-host-port (quri:uri-host proxy-uri)
+                                               (or (quri:uri-port proxy-uri) 80)))
+          (when-let (ui (quri:uri-userinfo proxy-uri))
+            (destructuring-bind (user &optional (pass ""))
+                (split-sequence #\: ui)
+              (set-request-credentials req :proxy :basic user pass))))
+        (dolist (hdr headers)
+          (winhttp:add-request-headers
+           req (format nil "~:(~A~): ~A" (car hdr) (cdr hdr))))
+        (when (and https (handle-insecure-p h))
+          (ignore-errors (winhttp::set-ignore-certificates req)))
+        (let* ((body (or content #()))
+               (ok (winhttp:send-request req body)))
+          (unless (or ok (pending-p))
+            (winhttp::get-last-error)))
+        h)))
+
   (defun %start-async-request (h uri method headers content
                                &key system-proxy-p proxy-uri insecure
                                  user-agent)
     (let* ((id (%register-handle h))
-           (host (strip-ipv6-brackets (quri:uri-host uri)))
-           (port (or (quri:uri-port uri)
-                     (if (string-equal (quri:uri-scheme uri) "https") 443 80)))
-           (https (string-equal (quri:uri-scheme uri) "https"))
            (session (open-http-session (or user-agent "http-backend-winhttp/0.1")
-                                       system-proxy-p :async t))
-           (ctx (cffi:make-pointer id)))
+                                       system-proxy-p :async t)))
       (setf (handle-session h) session
             (handle-uri h) uri
             (handle-method h) method
+            (handle-headers h) headers
             (handle-content h) content
-            (handle-proxy-uri h) proxy-uri)
+            (handle-proxy-uri h) proxy-uri
+            (handle-system-proxy-p h) system-proxy-p
+            (handle-insecure-p h) insecure
+            (handle-user-agent h) user-agent)
       (winhttp:set-status-callback session (cffi:get-callback '%winhttp-status-cb))
-      (let ((conn (winhttp:http-connect session host port)))
-        (setf (handle-conn h) conn)
-        (let ((req (winhttp:http-open-request conn
-                                              :verb method
-                                              :url (%path-query uri)
-                                              :https-p https)))
-          (setf (handle-req h) req)
-          (set-option req +winhttp-option-disable-feature+
-                      (logior +winhttp-disable-cookies+
-                              +winhttp-disable-redirects+))
-          (set-option req +winhttp-option-autologon-policy+
-                      (autologon-policy-value))
-          ;; Context for callbacks
-          (cffi:with-foreign-object (p :pointer)
-            (setf (cffi:mem-ref p :pointer) ctx)
-            (winhttp::%set-option req +winhttp-option-context+ p
-                                  (cffi:foreign-type-size :pointer)))
-          (when proxy-uri
-            (set-request-proxy req
-                               (format-host-port (quri:uri-host proxy-uri)
-                                                 (or (quri:uri-port proxy-uri) 80)))
-            (when-let (ui (quri:uri-userinfo proxy-uri))
-              (destructuring-bind (user &optional (pass ""))
-                  (split-sequence #\: ui)
-                (set-request-credentials req :proxy :basic user pass))))
-          (dolist (hdr headers)
-            (winhttp:add-request-headers
-             req (format nil "~:(~A~): ~A" (car hdr) (cdr hdr))))
-          (when (and https insecure)
-            (ignore-errors (winhttp::set-ignore-certificates req)))
-          (let* ((body (or content #()))
-                 (ok (winhttp:send-request req body)))
-            (unless (or ok (pending-p))
-              (winhttp::get-last-error)))
-          h)))))
+      (%open-request-on-session h))))
 
 #- (or win32 windows mswindows)
 (defun %start-async-request (&rest args)

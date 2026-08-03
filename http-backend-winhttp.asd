@@ -20,6 +20,7 @@
                (:file "ffi")
                (:file "auth")
                (:file "stream")
+               (:file "redirect")
                (:file "async")
                (:file "backend"))
   :in-order-to ((test-op (test-op "http-backend-winhttp/tests"))))
