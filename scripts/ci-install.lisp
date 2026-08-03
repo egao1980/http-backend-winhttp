@@ -1,6 +1,6 @@
 ;;;; Phase 1: fetch OCI deps. Do NOT ASDF-load / ql:quickload mid-flight
 ;;;; while still pulling from GHCR (cffi/cl+ssl breaks dexador HTTPS).
-;;;; No sibling checkouts — only this repo + .cl-repository (see MEMORY).
+;;;; Bootstrap: oras-pulled cl-repository-client on CL_SOURCE_REGISTRY (see MEMORY).
 
 (setf *debugger-hook*
       (lambda (c h)

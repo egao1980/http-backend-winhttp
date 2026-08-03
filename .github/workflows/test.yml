@@ -13,7 +13,9 @@ concurrency:
 env:
   SBCL_VERSION: 2.4.11
   ROSWELL_VERSION: "26.02.116"
-  CL_REPOSITORY_REF: "main"
+  # Bootstrap from OCI — do not git-checkout egao1980/cl-repository.
+  CL_REPOSITORY_CLIENT_IMAGE: "ghcr.io/egao1980/cl-repository/cl-repository-client"
+  CL_REPOSITORY_CLIENT_VERSION: "0.9.0"
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
@@ -28,14 +30,12 @@ jobs:
       contents: read
       packages: read
     steps:
-      # Only this repo + cl-repository. No sibling project checkouts.
+      # Only this repo. Client comes from GHCR OCI.
       - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
+      - uses: oras-project/setup-oras@v1
         with:
-          repository: egao1980/cl-repository
-          ref: ${{ env.CL_REPOSITORY_REF }}
-          path: .cl-repository
+          version: 1.2.3
 
       - name: Install Roswell (Unix)
         if: runner.os != 'Windows'
@@ -61,6 +61,21 @@ jobs:
           ros install "sbcl-bin/$SBCL_VERSION"
           ros use "sbcl-bin/$SBCL_VERSION"
 
+      - name: Pull cl-repository-client (OCI)
+        shell: bash
+        run: |
+          echo "${GITHUB_TOKEN}" | oras login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          rm -rf /tmp/cl-repo-pull .cl-repository
+          mkdir -p /tmp/cl-repo-pull .cl-repository
+          oras pull "${CL_REPOSITORY_CLIENT_IMAGE}:${CL_REPOSITORY_CLIENT_VERSION}" -o /tmp/cl-repo-pull
+          for f in /tmp/cl-repo-pull/*.tar.gz; do
+            tar -xzf "$f" -C .cl-repository
+          done
+          CLIENT_DIR="$(find .cl-repository -maxdepth 1 -type d -name 'cl-oci-*' | head -1)"
+          : "${CLIENT_DIR:?cl-oci-* not found after oras pull}"
+          echo "CL_REPOSITORY_CLIENT_DIR=${CLIENT_DIR}" >> "$GITHUB_ENV"
+          ls -la "${CLIENT_DIR}"
+
       - name: Bootstrap cl-repository-client (QL deps for client only)
         shell: bash
         run: |
@@ -69,11 +84,11 @@ jobs:
       - name: cl-repo install deps
         shell: bash
         run: |
-          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/.cl-repository//:"
+          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/${CL_REPOSITORY_CLIENT_DIR}//:"
           ros -l scripts/ci-install.lisp -q
 
       - name: Test
         shell: bash
         run: |
-          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/.cl-repository//:"
+          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/${CL_REPOSITORY_CLIENT_DIR}//:"
           ros -l scripts/ci-test.lisp -q
