@@ -19,6 +19,7 @@
   :components ((:file "package")
                (:file "ffi")
                (:file "auth")
+               (:file "chunk")
                (:file "stream")
                (:file "redirect")
                (:file "async")

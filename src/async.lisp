@@ -29,7 +29,22 @@
    (insecure :initarg :insecure :accessor handle-insecure-p :initform nil)
    (user-agent :initarg :user-agent :accessor handle-user-agent :initform nil)
    (basic-auth :initarg :basic-auth :accessor handle-basic-auth)
-   (content :initarg :content :accessor handle-content)
+   (content :initarg :content :accessor handle-content :initform nil)
+   (stream-body-p :initarg :stream-body-p :accessor handle-stream-body-p
+                  :initform nil)
+   (chunked-p :initarg :chunked-p :accessor handle-chunked-p :initform nil)
+   (content-length :initarg :content-length :accessor handle-content-length
+                   :initform nil)
+   (body-stream-src :initarg :body-stream-src :accessor handle-body-stream-src
+                    :initform nil
+                    :documentation "Lisp input stream for upload WriteData.")
+   (upload-read-buf :initform nil :accessor handle-upload-read-buf)
+   (upload-frame :initform nil :accessor handle-upload-frame)
+   (upload-pos :initform 0 :accessor handle-upload-pos)
+   (upload-foreign :initform nil :accessor handle-upload-foreign
+                   :documentation "Pinned buffer for in-flight WriteData.")
+   (upload-done-p :initform nil :accessor handle-upload-done-p)
+   (writing-body-p :initform nil :accessor handle-writing-body-p)
    (accept-encoding :initarg :accept-encoding :accessor handle-accept-encoding
                     :initform nil)
    (cookie-jar :initarg :cookie-jar :accessor handle-cookie-jar :initform nil)
@@ -47,10 +62,13 @@
    (headers-delivered :initform nil :accessor handle-headers-delivered-p)
    (read-buf :initform nil :accessor handle-read-buf
              :documentation "Foreign buffer for async WinHttpReadData.")
-   (read-buf-len :initform 65536 :reader handle-read-buf-len)
+   (read-buf-len :initform nil :accessor handle-read-buf-len)
    (read-paused :initform nil :accessor handle-read-paused-p)
    (finished :initform nil :accessor handle-finished-p)
    (lock :initform (bt:make-lock "winhttp-handle") :reader handle-lock)))
+
+(defun %upload-buf-size ()
+  (or (ignore-errors *http-stream-buffer-size*) 65536))
 
 (defun %register-handle (h)
   (bt:with-lock-held (*winhttp-ctx-lock*)
@@ -105,11 +123,17 @@
   #-(or win32 windows mswindows)
   (declare (ignore h)))
 
+(defun %free-upload-foreign (h)
+  (when-let (buf (handle-upload-foreign h))
+    (ignore-errors (cffi:foreign-free buf))
+    (setf (handle-upload-foreign h) nil)))
+
 (defun %cleanup (h)
   (bt:with-lock-held ((handle-lock h))
     (when-let (buf (handle-read-buf h))
       (ignore-errors (cffi:foreign-free buf))
       (setf (handle-read-buf h) nil))
+    (%free-upload-foreign h)
     (when-let (r (handle-req h))
       (%close-hinternet r)
       (setf (handle-req h) nil))
@@ -157,9 +181,95 @@
             (quri:uri-query uri)))
 
   (defun %ensure-read-buf (h)
+    (unless (handle-read-buf-len h)
+      (setf (handle-read-buf-len h) (%upload-buf-size)))
     (or (handle-read-buf h)
         (setf (handle-read-buf h)
               (cffi:foreign-alloc :uint8 :count (handle-read-buf-len h)))))
+
+  (defun %ensure-upload-read-buf (h)
+    (or (handle-upload-read-buf h)
+        (setf (handle-upload-read-buf h)
+              (make-array (%upload-buf-size)
+                          :element-type '(unsigned-byte 8)))))
+
+  (defun %load-upload-frame (h)
+    "Fill UPLOAD-FRAME from body stream. NIL = raw-length EOF (receive next)."
+    (let* ((src (or (handle-body-stream-src h) (handle-content h)))
+           (buf (%ensure-upload-read-buf h))
+           (n (read-sequence buf src)))
+      (setf (handle-upload-pos h) 0
+            (handle-upload-frame h)
+            (cond
+              ((plusp n)
+               (if (handle-chunked-p h)
+                   (make-chunk-frame buf :end n)
+                   (subseq buf 0 n)))
+              ((handle-chunked-p h)
+               (setf (handle-upload-done-p h) t)
+               +chunked-terminator+)
+              (t
+               (setf (handle-upload-done-p h) t)
+               nil)))))
+
+  (defun %begin-receive (h)
+    (setf (handle-writing-body-p h) nil)
+    (%free-upload-foreign h)
+    (handler-case
+        (winhttp:receive-response (handle-req h))
+      (error (e) (%fail h e))))
+
+  (defun %issue-write (h)
+    "Write remaining UPLOAD-FRAME via WinHttpWriteData."
+    (let* ((frame (handle-upload-frame h))
+           (pos (handle-upload-pos h))
+           (n (- (length frame) pos)))
+      (when (zerop n)
+        (return-from %issue-write (%kick-write h)))
+      (%free-upload-foreign h)
+      (let ((ptr (cffi:foreign-alloc :uint8 :count n)))
+        (setf (handle-upload-foreign h) ptr)
+        (dotimes (i n)
+          (setf (cffi:mem-aref ptr :uint8 i) (aref frame (+ pos i))))
+        (handler-case
+            (when (write-data (handle-req h) ptr n)
+              ;; Sync complete (unusual for ASYNC session).
+              (%on-write-complete h n))
+          (error (e) (%fail h e))))))
+
+  (defun %kick-write (h)
+    "Pump next upload frame, or RECEIVE_RESPONSE when body is done."
+    (when (or (winhttp-request-canceled-p h) (handle-finished-p h))
+      (return-from %kick-write))
+    (setf (handle-writing-body-p h) t)
+    (when (and (handle-upload-frame h)
+               (< (handle-upload-pos h) (length (handle-upload-frame h))))
+      (return-from %kick-write (%issue-write h)))
+    (let ((frame (%load-upload-frame h)))
+      (if frame
+          (%issue-write h)
+          (%begin-receive h))))
+
+  (defun %on-write-complete (h nbytes)
+    "Advance upload after WRITE_COMPLETE (or sync WriteData)."
+    (incf (handle-upload-pos h) nbytes)
+    (%free-upload-foreign h)
+    (let* ((frame (handle-upload-frame h))
+           (frame-done (or (null frame)
+                           (>= (handle-upload-pos h) (length frame))))
+           (final-p (handle-upload-done-p h)))
+      (cond
+        ((not frame-done)
+         (%issue-write h))
+        (final-p
+         ;; Finished chunked terminator (or a final framed write).
+         (setf (handle-upload-frame h) nil
+               (handle-upload-pos h) 0)
+         (%begin-receive h))
+        (t
+         (setf (handle-upload-frame h) nil
+               (handle-upload-pos h) 0)
+         (%kick-write h)))))
 
   (defun %kick-read (h)
     "Issue next WinHttpReadData (async → READ_COMPLETE or sync complete)."
@@ -287,6 +397,11 @@
                     (handle-uri h) uri
                     (handle-headers h) headers
                     (handle-content h) body
+                    (handle-stream-body-p h) (streamp body)
+                    (handle-body-stream-src h) (and (streamp body) body)
+                    (handle-chunked-p h) nil
+                    (handle-content-length h)
+                    (and (not (streamp body)) (length (or body #())))
                     (handle-body-chunks h) nil
                     (handle-headers-ht h) nil
                     (handle-status h) nil
@@ -322,6 +437,9 @@
                                      (handle-basic-auth h))
           (handler-case
               (progn
+                (when (handle-stream-body-p h)
+                  (error 'http-protocol-error
+                         :message "cannot replay streamed request body on auth challenge"))
                 (drain-response-body req)
                 (let* ((content (or (handle-content h) #()))
                        (ok (winhttp:send-request req content)))
@@ -346,6 +464,13 @@
             (setf (handle-body-chunks h) nil)
             (%kick-read h)))))
 
+  (defun %reset-upload-state (h)
+    (setf (handle-upload-frame h) nil
+          (handle-upload-pos h) 0
+          (handle-upload-done-p h) nil
+          (handle-writing-body-p h) nil)
+    (%free-upload-foreign h))
+
   (winhttp:define-status-callback %winhttp-status-cb
       (hinternet context status infop infolen)
     (declare (ignore hinternet))
@@ -356,9 +481,17 @@
       (handler-case
           (case status
             (:sendrequest-complete
-             (handler-case
-                 (winhttp:receive-response (handle-req h))
-               (error (e) (%fail h e))))
+             (if (handle-stream-body-p h)
+                 (%kick-write h)
+                 (handler-case
+                     (winhttp:receive-response (handle-req h))
+                   (error (e) (%fail h e)))))
+            (:write-complete
+             ;; lpvStatusInformation → DWORD bytes written (not INFOLEN).
+             (let ((n (if (and infop (not (cffi:null-pointer-p infop)))
+                          (cffi:mem-ref infop :uint32)
+                          infolen)))
+               (%on-write-complete h n)))
             (:headers-available
              (%on-headers h))
             (:data-available
@@ -388,6 +521,7 @@
            (ctx (cffi:make-pointer (handle-id h)))
            (conn (winhttp:http-connect session host port)))
       (setf (handle-conn h) conn)
+      (%reset-upload-state h)
       (let ((req (winhttp:http-open-request conn
                                             :verb method
                                             :url (%path-query uri)
@@ -416,10 +550,18 @@
            req (format nil "~:(~A~): ~A" (car hdr) (cdr hdr))))
         (when (and https (handle-insecure-p h))
           (ignore-errors (winhttp::set-ignore-certificates req)))
-        (let* ((body (or content #()))
-               (ok (winhttp:send-request req body)))
-          (unless (or ok (pending-p))
-            (winhttp::get-last-error)))
+        (cond
+          ((handle-stream-body-p h)
+           ;; Headers only; body via WriteData after SENDREQUEST_COMPLETE.
+           (let ((total (if (handle-chunked-p h)
+                            +winhttp-ignore-request-total-length+
+                            (or (handle-content-length h) 0))))
+             (send-request-total req total)))
+          (t
+           (let* ((body (if (streamp content) #() (or content #())))
+                  (ok (winhttp:send-request req body)))
+             (unless (or ok (pending-p))
+               (winhttp::get-last-error)))))
         h)))
 
   (defun %start-async-request (h uri method headers content
@@ -437,6 +579,8 @@
             (handle-system-proxy-p h) system-proxy-p
             (handle-insecure-p h) insecure
             (handle-user-agent h) user-agent)
+      (when (and (handle-stream-body-p h) (null (handle-body-stream-src h)))
+        (setf (handle-body-stream-src h) content))
       (winhttp:set-status-callback session (cffi:get-callback '%winhttp-status-cb))
       (%open-request-on-session h))))
 

@@ -4,11 +4,12 @@
 ;;; Same shape as http-backend-async's async-body stream (producer/consumer + CV).
 
 (defvar *winhttp-body-queue-limit* nil
-  "Max buffered octets (NIL → 4 × *HTTP-STREAM-BUFFER-SIZE*).")
+  "Max buffered octets for :want-stream downloads (NIL → 4 × *HTTP-STREAM-BUFFER-SIZE*).
+   Producer (WinHttpReadData) pauses when full; consumer drain resumes via on-space.")
 
 (defun %body-limit ()
   (or *winhttp-body-queue-limit*
-      (* 4 *http-stream-buffer-size*)))
+      (* 4 (or (ignore-errors *http-stream-buffer-size*) 65536))))
 
 (defclass winhttp-body-input-stream
     (trivial-gray-streams:fundamental-binary-input-stream)

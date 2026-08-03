@@ -25,4 +25,7 @@
            #:make-winhttp-body-input-stream
            #:body-feed
            #:body-eof
-           #:body-full-p))
+           #:body-full-p
+           #:make-chunk-frame
+           #:+chunked-terminator+
+           #:apply-stream-upload-headers))
