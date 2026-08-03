@@ -1,0 +1,79 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: http-backend-winhttp-test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SBCL_VERSION: 2.4.11
+  ROSWELL_VERSION: "26.02.116"
+  CL_REPOSITORY_REF: "main"
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the primary target (WinHTTP). Ubuntu covers non-Windows stubs.
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      # Only this repo + cl-repository. No sibling project checkouts.
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: egao1980/cl-repository
+          ref: ${{ env.CL_REPOSITORY_REF }}
+          path: .cl-repository
+
+      - name: Install Roswell (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -sL https://raw.githubusercontent.com/roswell/roswell/master/scripts/install-for-ci.sh | bash
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install Roswell (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -sL "https://github.com/roswell/roswell/releases/download/v${ROSWELL_VERSION}/roswell_${ROSWELL_VERSION}_amd64.zip" \
+            -o /tmp/roswell.zip
+          rm -rf /c/roswell && mkdir -p /c/roswell
+          unzip -qo /tmp/roswell.zip -d /c/roswell
+          echo "/c/roswell/roswell" >> "$GITHUB_PATH"
+          echo "$HOME/.roswell/bin" >> "$GITHUB_PATH"
+
+      - name: Install SBCL
+        shell: bash
+        run: |
+          ros install "sbcl-bin/$SBCL_VERSION"
+          ros use "sbcl-bin/$SBCL_VERSION"
+
+      - name: Bootstrap cl-repository-client (QL deps for client only)
+        shell: bash
+        run: |
+          ros -e '(ql:quickload (quote ("yason" "ironclad" "babel" "dexador" "quri" "chipz" "flexi-streams" "cl-ppcre" "cl-base64" "trivial-features" "salza2" "archive")) :silent t)' -q
+
+      - name: cl-repo install deps
+        shell: bash
+        run: |
+          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/.cl-repository//:"
+          ros -l scripts/ci-install.lisp -q
+
+      - name: Test
+        shell: bash
+        run: |
+          export CL_SOURCE_REGISTRY="$(pwd)//:$(pwd)/.cl-repository//:"
+          ros -l scripts/ci-test.lisp -q

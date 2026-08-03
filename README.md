@@ -28,3 +28,7 @@ MIT. Windows [`http-protocol`](https://github.com/egao1980/http-protocol) backen
 ```
 
 Non-Windows: library loads; `make-winhttp-backend` signals `unsupported-operation`.
+
+## CI / deps
+
+cl-repository only — no sibling project checkouts. Workflow checkouts this repo + `egao1980/cl-repository`; everything else via `ghcr.io/egao1980/cl-systems` (`scripts/ci-install.lisp` / `ci-test.lisp`). Matrix: `windows-latest` (primary) + `ubuntu-latest` (stubs).
