@@ -31,4 +31,4 @@ Non-Windows: library loads; `make-winhttp-backend` signals `unsupported-operatio
 
 ## CI / deps
 
-No sibling checkouts. Workflow checkouts **only this repo**; bootstraps `cl-repository-client` from OCI (`ghcr.io/egao1980/cl-repository/cl-repository-client`); project deps via `ghcr.io/egao1980/cl-systems` (`scripts/ci-install.lisp` / `ci-test.lisp`). Matrix: `windows-latest` (primary) + `ubuntu-latest` (stubs).
+No sibling checkouts. Workflow checkouts **only this repo**; bootstraps `cl-repository-client` from OCI (`ghcr.io/egao1980/cl-repository/cl-repository-client:0.10.0`); project deps via `ghcr.io/egao1980/cl-systems` (`scripts/ci-install.lisp` / `ci-test.lisp`). Matrix: `windows-latest` (primary) + `ubuntu-latest` (stubs).
