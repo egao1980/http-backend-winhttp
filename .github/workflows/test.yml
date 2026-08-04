@@ -31,9 +31,9 @@ jobs:
       packages: read
     steps:
       # Only this repo. Client comes from GHCR OCI.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: oras-project/setup-oras@v1
+      - uses: oras-project/setup-oras@v2
         with:
           version: 1.2.3
 
