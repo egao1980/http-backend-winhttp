@@ -1,5 +1,5 @@
 (defsystem "http-backend-winhttp"
-  :version "0.1.1"
+  :version "0.1.2"
   :description "WinHTTP http-protocol backend — async I/O, streams, Windows proxy auth"
   :author "egao1980"
   :license "MIT"

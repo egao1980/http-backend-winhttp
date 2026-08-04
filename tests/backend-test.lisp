@@ -6,6 +6,33 @@
   #-(or win32 windows mswindows)
   (ok (not (winhttp-available-p))))
 
+(deftest http2-option-constants
+  (ok (= 133 http-backend-winhttp::+winhttp-option-enable-http-protocol+))
+  (ok (= 134 http-backend-winhttp::+winhttp-option-http-protocol-used+))
+  (ok (= 1 http-backend-winhttp::+winhttp-protocol-flag-http2+)))
+
+(deftest maybe-enable-http2-skips-http11
+  "Preference :http/1.1 must not call enable (no error on stub)."
+  (ok (null (http-backend-winhttp::maybe-enable-http2 nil :http/1.1))))
+
+(deftest maybe-enable-http2-forced-signals-off-windows
+  #-(or win32 windows mswindows)
+  (ok (signals (http-backend-winhttp::maybe-enable-http2 nil :http/2)
+               'http-version-not-available))
+  #+(or win32 windows mswindows)
+  (ok t))
+
+(deftest negotiated-http-version-enforces
+  "Forced :http/2 with stub negotiated 1.1 → http-version-not-available."
+  #-(or win32 windows mswindows)
+  (progn
+    (ok (eq :http/1.1
+            (http-backend-winhttp::negotiated-http-version nil :auto)))
+    (ok (signals (http-backend-winhttp::negotiated-http-version nil :http/2)
+                 'http-version-not-available)))
+  #+(or win32 windows mswindows)
+  (ok t))
+
 (deftest make-backend-requires-windows
   #+(or win32 windows mswindows)
   (ok (typep (make-winhttp-backend) 'winhttp-backend))

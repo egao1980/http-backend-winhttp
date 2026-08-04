@@ -25,7 +25,7 @@
 (cl-repository-client/asdf-integration:load-system-init-files)
 
 (defun ci-assert-http-protocol-api ()
-  "Fail fast unless http-protocol ≥ 0.2.0 (form-data + typed :data)."
+  "Fail fast unless http-protocol has form-data + HTTP version preference API."
   (asdf:load-system "http-protocol")
   (format t "~&; ci: http-protocol from ~a (version ~a)~%"
           (asdf:system-source-directory (asdf:find-system "http-protocol"))
@@ -35,9 +35,12 @@
                (fboundp (find-symbol "RESPONSE-DATA" :http-protocol))
                (fboundp (find-symbol "ENCODE-HTTP-DATA" :http-protocol))
                (find-symbol "HTTP-REQUEST-FORM-DATA" :http-protocol)
-               (macro-function (find-symbol "WITH-DATA-DESERIALIZER" :http-protocol)))
-    (error "http-protocol missing 0.2.0 API (form-data / typed :data / response-data) —
-need OCI ghcr.io/egao1980/cl-systems/http-protocol:0.2.0+")))
+               (macro-function (find-symbol "WITH-DATA-DESERIALIZER" :http-protocol))
+               (fboundp (find-symbol "EFFECTIVE-HTTP-VERSION" :http-protocol))
+               (fboundp (find-symbol "ENSURE-HTTP-VERSION-AVAILABLE" :http-protocol))
+               (find-symbol "HTTP-VERSION-NOT-AVAILABLE" :http-protocol))
+    (error "http-protocol missing HTTP version preference API —
+need OCI ghcr.io/egao1980/cl-systems/http-protocol:0.3.0+")))
 
 (call-with-ci-muffles
  (lambda ()
