@@ -36,3 +36,14 @@ Non-Windows: library loads; `make-winhttp-backend` signals `unsupported-operatio
 ## CI / deps
 
 No sibling checkouts. Workflow checkouts **only this repo**; bootstraps `cl-repository-client` from OCI (`ghcr.io/egao1980/cl-repository/cl-repository-client:0.10.0`); project deps via `ghcr.io/egao1980/cl-systems` (`scripts/ci-install.lisp` / `ci-test.lisp`). Matrix: `windows-latest` (primary) + `ubuntu-latest` (stubs).
+
+## Publish
+
+Source-only OCI publish is centralized in [`cl-stack-systems`](https://github.com/egao1980/cl-stack-systems)
+(`imports/http-backend-winhttp/qlfile` pin + shared `publish.yml`). Packaging metadata lives in the `.asd`
+(`auto-package-spec`):
+
+```bash
+gh workflow run publish.yml -R egao1980/cl-stack-systems -f import=http-backend-winhttp
+```
+
