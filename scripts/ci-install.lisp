@@ -83,27 +83,7 @@
    ;; GHCR pulls before any ql:quickload that may load cffi/cl+ssl.
    (ci-fetch "http-protocol" :version "0.3.0")
    (ci-fetch "event-protocol")
-   ;; ws-protocol 0.2.0+ (CLOS transport). Fall back to git if OCI not yet tagged.
-   (handler-case (ci-fetch "ws-protocol" :version "0.2.0")
-     (error (e)
-       (format t "~&; ci: ws-protocol OCI unavailable (~A) — git fallback~%" e)
-       (let* ((root (cl-repository-client/installer:systems-root))
-              (dest (merge-pathnames "ws-protocol/0.2.0/" root)))
-         (unless (probe-file (merge-pathnames "ws-protocol.asd" dest))
-           (ensure-directories-exist dest)
-           (uiop:run-program
-            (list "git" "clone" "--depth" "1" "--branch" "cursor/ws-transport-clos-3a7a"
-                  "https://github.com/egao1980/ws-protocol.git"
-                  (uiop:native-namestring dest))
-            :output t :error-output t
-            :ignore-error-status t)
-           (unless (probe-file (merge-pathnames "ws-protocol.asd" dest))
-             (uiop:run-program
-              (list "git" "clone" "--depth" "1"
-                    "https://github.com/egao1980/ws-protocol.git"
-                    (uiop:native-namestring dest))
-              :output t :error-output t)))
-         (cl-repository-client/asdf-integration:configure-asdf-source-registry))))
+   (ci-fetch "ws-protocol" :version "0.2.0")
    (ci-fetch "cffi" :version "0.24.1")
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
                 "split-sequence" "trivial-gray-streams" "winhttp"
