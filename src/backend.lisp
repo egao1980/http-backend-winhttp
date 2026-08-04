@@ -2,7 +2,7 @@
 
 ;;; http-protocol backend: SEND-ASYNC (WinHTTP async) + blocking SEND await.
 
-(defclass winhttp-backend (http-backend)
+(defclass winhttp-backend (http-backend ws-backend)
   ()
   (:default-initargs :name "winhttp"))
 
