@@ -33,6 +33,12 @@
 ;;; WinHttpSendRequest dwTotalLength when body length is unknown (chunked).
 (defconstant +winhttp-ignore-request-total-length+ #xffffffff)
 
+(defun http-protocol-flags-to-version (flags)
+  "Map WINHTTP_OPTION_HTTP_PROTOCOL_USED bitfield → :http/1.1 | :http/2."
+  (if (plusp (logand (or flags 0) +winhttp-protocol-flag-http2+))
+      :http/2
+      :http/1.1))
+
 #+ (or win32 windows mswindows)
 (progn
   (cffi:defcstruct winhttp-proxy-info
@@ -102,10 +108,8 @@
     "Map WINHTTP_OPTION_HTTP_PROTOCOL_USED → :http/1.1 | :http/2.
      Falls back to :http/1.1 when the option is unavailable."
     (handler-case
-        (let ((flags (query-option-uint32 req +winhttp-option-http-protocol-used+)))
-          (if (plusp (logand flags +winhttp-protocol-flag-http2+))
-              :http/2
-              :http/1.1))
+        (http-protocol-flags-to-version
+         (query-option-uint32 req +winhttp-option-http-protocol-used+))
       (error () :http/1.1)))
 
   (defun set-request-proxy (req proxy-hostport)
@@ -211,7 +215,7 @@
              (error 'http-version-not-available
                     :requested :http/2
                     :negotiated nil
-                    :message "WinHTTP could not enable HTTP/2")))))))
+                    :message "WinHTTP could not enable HTTP/2"))))))))
 
 (defun negotiated-http-version (req preference &key (backend-name "winhttp"))
   "Query negotiated version and enforce PREFERENCE via ensure-http-version-available."
