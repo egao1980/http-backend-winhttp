@@ -25,7 +25,7 @@
                         out)))))))
 
 (let* ((name "http-backend-winhttp")
-       (version (env "PKG_VERSION" "0.1.2"))
+       (version (env "PKG_VERSION" "0.1.3"))
        (source-dir (uiop:ensure-directory-pathname
                     (env "PKG_SOURCE_DIR" (namestring (uiop:getcwd)))))
        (_ (sync-asdf-version! source-dir version))
@@ -42,10 +42,10 @@
                :version version
                :source-dir source-dir
                :license "MIT"
-               :description "WinHTTP http-protocol backend — async I/O, streams, Windows proxy auth"
+               :description "WinHTTP http-protocol backend — async I/O, streams, Windows proxy auth, WebSocket"
                :author "egao1980"
                ;; winhttp itself is feature-gated in the asd (Windows only).
-               :depends-on '("http-protocol" "event-protocol" "quri" "cffi"
+               :depends-on '("http-protocol" "event-protocol" "ws-protocol" "quri" "cffi"
                              "cl-base64" "babel" "alexandria" "bordeaux-threads"
                              "split-sequence" "trivial-gray-streams")
                :provides '("http-backend-winhttp")))

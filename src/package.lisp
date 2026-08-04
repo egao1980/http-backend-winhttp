@@ -1,5 +1,35 @@
 (defpackage #:http-backend-winhttp
   (:use #:cl #:http-protocol)
+  (:import-from #:ws-protocol
+                #:ws-backend
+                #:ws-backend-p
+                #:ws-client
+                #:make-ws-client
+                #:ws-client-headers
+                #:ws-client-protocols
+                #:ws-client-transport
+                #:ws-client-auth
+                #:ws-client-proxy
+                #:ws-client-verify
+                #:ws-connection
+                #:ws-error
+                #:ws-handshake-error
+                #:ws-connection-error
+                #:ws-protocol-error
+                #:ws-transport-not-available
+                #:backend-ws-transports
+                #:backend-supports-ws-transport-p
+                #:resolve-ws-transport
+                #:inject-auth-headers
+                #:connect
+                #:send-text
+                #:send-binary
+                #:ping
+                #:close-connection
+                #:on-event
+                #:%connection-ready-state)
+  (:shadowing-import-from #:http-protocol
+                          #:unsupported-operation)
   (:import-from #:event-protocol
                 #:*event-backend*
                 #:*event-loop*
@@ -28,4 +58,5 @@
            #:body-full-p
            #:make-chunk-frame
            #:+chunked-terminator+
-           #:apply-stream-upload-headers))
+           #:apply-stream-upload-headers
+           #:winhttp-ws-connection))

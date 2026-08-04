@@ -18,6 +18,7 @@ MIT. Windows [`http-protocol`](https://github.com/egao1980/http-protocol) backen
 | SOCKS | Unsupported → use `http-backend-async` |
 | Pooling | WinHTTP session keep-alive (not Lisp LRU) |
 | Retries | Protocol `http-retry` around `SEND` |
+| WebSocket | `ws-backend` — RFC 6455 Upgrade via `WinHttpWebSocket*` (`:http/1.1`; not RFC 8441) |
 
 ```lisp
 #+windows
