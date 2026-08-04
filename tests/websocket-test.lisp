@@ -34,14 +34,13 @@
     (ok https-p)))
 
 (defun %winhttp-ws-live-p ()
-  (cond
-    ((fboundp 'ws-protocol:feature-or-env-enabled-p)
-     (ws-protocol:feature-or-env-enabled-p :winhttp-ws-live "WINHTTP_WS_LIVE"))
-    (t
-     (let ((v (uiop:getenv "WINHTTP_WS_LIVE")))
-       (and v (not (member (string-downcase v)
-                           '("" "0" "false" "no" "off")
-                           :test #'string=)))))))
+  (let ((fn (find-symbol "FEATURE-OR-ENV-ENABLED-P" :ws-protocol)))
+    (if (and fn (fboundp fn))
+        (funcall fn :winhttp-ws-live "WINHTTP_WS_LIVE")
+        (let ((v (uiop:getenv "WINHTTP_WS_LIVE")))
+          (and v (not (member (string-downcase v)
+                              '("" "0" "false" "no" "off")
+                              :test #'string=)))))))
 
 (deftest winhttp-ws-echo-live-optional
   "Live H1 Upgrade echo — gate with WINHTTP_WS_LIVE=1 or :winhttp-ws-live."
