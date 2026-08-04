@@ -1,5 +1,5 @@
 (defsystem "http-backend-winhttp"
-  :version "0.1.1"
+  :version "0.1.2"
   :description "WinHTTP http-protocol backend — async I/O, streams, Windows proxy auth"
   :author "egao1980"
   :license "MIT"
@@ -31,7 +31,8 @@
   :pathname "tests"
   :serial t
   :components ((:file "package")
-               (:file "backend-test"))
+               (:file "backend-test")
+               (:file "http2-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)
                (error "tests failed for ~A" (component-name c)))))

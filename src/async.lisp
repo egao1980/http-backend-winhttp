@@ -345,12 +345,15 @@
 
   (defun %make-response (h body &key (history-for-final nil))
     (let* ((req (handle-http-request h))
+           (client (handle-client h))
            (uri (handle-uri h))
            (url (quri:render-uri uri))
            (ht (handle-headers-ht h))
            (jar (or (handle-cookie-jar h)
-                    (resolve-cookie-jar (handle-client h) req :url url)))
-           (cookies (merge-response-cookies jar url ht)))
+                    (resolve-cookie-jar client req :url url)))
+           (cookies (merge-response-cookies jar url ht))
+           (pref (effective-http-version client req))
+           (http-ver (negotiated-http-version (handle-req h) pref)))
       (multiple-value-bind (body* headers*)
           (%apply-ce h body ht)
         (make-instance 'http-response
@@ -360,6 +363,7 @@
                        :url url
                        :cookies cookies
                        :history history-for-final
+                       :http-version http-ver
                        :request req))))
 
   (defun %close-req-conn (h)
@@ -533,6 +537,9 @@
                             +winhttp-disable-redirects+))
         (set-option req +winhttp-option-autologon-policy+
                     (autologon-policy-value))
+        ;; Prefer HTTP/2 when client/request asks for :auto or :http/2.
+        (maybe-enable-http2
+         req (effective-http-version (handle-client h) (handle-http-request h)))
         (cffi:with-foreign-object (p :pointer)
           (setf (cffi:mem-ref p :pointer) ctx)
           (winhttp::%set-option req +winhttp-option-context+ p

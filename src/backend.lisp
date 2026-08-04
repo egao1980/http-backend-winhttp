@@ -6,6 +6,12 @@
   ()
   (:default-initargs :name "winhttp"))
 
+(defmethod backend-http-versions ((backend winhttp-backend))
+  "WinHTTP can enable HTTP/2 (WINHTTP_PROTOCOL_FLAG_HTTP2) on Windows."
+  (declare (ignore backend))
+  #+(or win32 windows mswindows) '(:http/1.1 :http/2)
+  #-(or win32 windows mswindows) '(:http/1.1))
+
 (defvar *event-backend-maker* nil
   "Thunk → event-backend (libuv). Required for SEND-ASYNC marshaling.")
 
