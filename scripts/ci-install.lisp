@@ -83,7 +83,8 @@
    ;; GHCR pulls before any ql:quickload that may load cffi/cl+ssl.
    (ci-fetch "http-protocol" :version "0.3.0")
    (ci-fetch "event-protocol")
-   (ci-fetch "ws-protocol" :version "0.2.0")
+   (handler-case (ci-fetch "ws-protocol" :version "0.2.1")
+     (error () (ci-fetch "ws-protocol" :version "0.2.0")))
    (ci-fetch "cffi" :version "0.24.1")
    (dolist (n '("rove" "babel" "bordeaux-threads" "cl-base64"
                 "split-sequence" "trivial-gray-streams" "winhttp"

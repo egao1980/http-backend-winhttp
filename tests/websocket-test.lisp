@@ -32,3 +32,44 @@
     (ok (= 8443 port))
     (ok (string= "/chat?q=1" path))
     (ok https-p)))
+
+(defun %winhttp-ws-live-p ()
+  (cond
+    ((fboundp 'ws-protocol:feature-or-env-enabled-p)
+     (ws-protocol:feature-or-env-enabled-p :winhttp-ws-live "WINHTTP_WS_LIVE"))
+    (t
+     (let ((v (uiop:getenv "WINHTTP_WS_LIVE")))
+       (and v (not (member (string-downcase v)
+                           '("" "0" "false" "no" "off")
+                           :test #'string=)))))))
+
+(deftest winhttp-ws-echo-live-optional
+  "Live H1 Upgrade echo — gate with WINHTTP_WS_LIVE=1 or :winhttp-ws-live."
+  (cond
+    ((not (%winhttp-ws-live-p))
+     (skip "set WINHTTP_WS_LIVE=1 for WinHTTP WS echo smoke"))
+    #-(or win32 windows mswindows)
+    (t (skip "WinHTTP WS live requires Windows"))
+    #+(or win32 windows mswindows)
+    (t
+     (let* ((b (make-winhttp-backend))
+            (c (make-ws-client b :transport :http/1.1))
+            (url (or (uiop:getenv "WINHTTP_WS_URL")
+                     "wss://echo.websocket.events/"))
+            (payload (format nil "winhttp-ws-~A" (get-universal-time)))
+            (got nil)
+            (err nil))
+       (handler-case
+           (let ((conn (connect b c url :transport :http/1.1)))
+             (ok (eq :open (ws-protocol:ready-state conn)))
+             (ws-protocol:on-event conn :message (lambda (msg) (setf got msg)))
+             (ws-protocol:on-event conn :error (lambda (e) (setf err e)))
+             (ws-protocol:send-text conn payload)
+             (loop repeat 50
+                   until (or got err)
+                   do (sleep 0.2))
+             (ignore-errors (ws-protocol:close-connection conn))
+             (when err (fail (format nil "WS error: ~A" err)))
+             (ok (equal payload got)))
+         (error (e)
+           (fail (format nil "unexpected: ~A" e))))))))
