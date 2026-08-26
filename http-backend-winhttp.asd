@@ -15,7 +15,7 @@
                "split-sequence"
                "trivial-gray-streams"
                (:feature (:or :win32 :windows :mswindows) "winhttp"))
-  :properties (:cl-repo (:ci (:sources (("babel" :ql) ("trivial-features" :ql) ("cl-unicode" :ql)))))
+
   :serial t
   :pathname "src"
   :components ((:file "package")
